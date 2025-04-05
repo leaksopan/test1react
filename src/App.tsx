@@ -5,7 +5,6 @@ import { Icon } from 'leaflet';
 import { MapPin, MapPinOff, Link as LinkIcon, ExternalLink } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import gsap from 'gsap';
 // import { ForceGraph2D } from 'react-force-graph';
 
 // Fix for default marker icon
@@ -308,11 +307,6 @@ function NetworkGraph() {
     controls.maxDistance = 500;
     controls.minDistance = 50;
     
-    // Rotasi 360 derajat - menggunakan type casting
-    (controls as any).enableRotate = true;
-    (controls as any).minPolarAngle = 0;
-    (controls as any).maxPolarAngle = Math.PI; // Rotasi vertikal penuh
-    
     // Casting untuk akses properti yang tidak ada di tipe
     const orbitControlsAny = controls as any;
     orbitControlsAny.rotateSpeed = 0.75;
@@ -547,10 +541,6 @@ function NetworkGraph() {
     const onMouseClick = (event: MouseEvent) => {
       if (!chartRef.current || !cameraRef.current || !sceneRef.current) return;
       
-      // Hentikan autorotasi saat ada interaksi klik
-      autoRotate = false;
-      isUserInteracting = true;
-      
       // Normalisasi posisi mouse
       const rect = chartRef.current.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / width) * 2 - 1;
@@ -561,87 +551,71 @@ function NetworkGraph() {
       const intersects = raycaster.intersectObjects(Object.values(nodeObjects));
       
       if (intersects.length > 0) {
-        const selectedObject = intersects[0].object as THREE.Mesh;
+        const newSelectedObject = intersects[0].object as THREE.Mesh;
+        const nodeData = newSelectedObject.userData.node as HospitalNode;
         
-        // Reset warna objek yang sebelumnya dipilih
-        if (selectedObjectRef && selectedObjectRef !== selectedObject) {
-          if (selectedObjectRef.userData && selectedObjectRef.userData.node) {
-            const node = selectedObjectRef.userData.node as HospitalNode;
-            const material = getNodeMaterial(node.group);
-            selectedObjectRef.material = material;
-          }
-        }
+        // Reset semua node
+        Object.values(nodeObjects).forEach(obj => {
+          // Ganti penggunaan emissive dengan warna dasar
+          const baseMaterial = ((obj as THREE.Mesh).material as THREE.MeshBasicMaterial);
+          // Simpan warna asli
+          const originalColor = (baseMaterial.color as THREE.Color).clone();
+          baseMaterial.color.copy(originalColor);
+          
+          // Kembalikan ukuran normal
+          (obj as THREE.Mesh).scale.set(1, 1, 1);
+        });
         
-        // Pilih objek baru
-        selectedObjectRef = selectedObject;
-        
-        // Ambil data node
-        const userData = selectedObject.userData;
-        if (userData && userData.node) {
-          const node = userData.node as HospitalNode;
-          setSelectedNode(node);
-          
-          // Animasi kamera untuk melihat node yang dipilih
-          const targetPosition = new THREE.Vector3().copy(selectedObject.position);
-          const cameraIdealDistance = 100; // Jarak ideal kamera ke objek
-          
-          // Hitung posisi kamera target relatif terhadap objek
-          const cameraOffset = new THREE.Vector3(0, 0, cameraIdealDistance);
-          
-          // Animasi posisi kamera dengan menggunakan .lookAt secara manual
-          gsap.to(camera.position, {
-            duration: 1.5,
-            x: targetPosition.x + cameraOffset.x,
-            y: targetPosition.y + cameraOffset.y,
-            z: targetPosition.z + cameraOffset.z,
-            ease: "power2.inOut",
-            onUpdate: () => {
-              // Pastikan kamera selalu melihat ke objek target selama animasi
-              camera.lookAt(targetPosition);
-              // Update controller juga
-              if (controlsRef.current) {
-                // Gunakan type casting untuk mengakses target
-                (controlsRef.current as any).target.copy(targetPosition);
-                controlsRef.current.update();
-              }
-            },
-            onComplete: () => {
-              // Setelah animasi selesai, set target controller ke objek
-              if (controlsRef.current) {
-                // Gunakan type casting untuk mengakses target
-                (controlsRef.current as any).target.copy(targetPosition);
-                controlsRef.current.update();
-              }
-              // Kembalikan status interaksi setelah animasi selesai
-              setTimeout(() => {
-                isUserInteracting = false;
-              }, 500);
-            }
-          });
-          
-          // Highlight objek yang dipilih dengan warna khusus
-          const highlightMaterial = new THREE.MeshBasicMaterial({ 
-            color: 0xff0000
-          });
-          // Set property tambahan setelah pembuatan material
-          (highlightMaterial as any).emissive = new THREE.Color(0xff0000);
-          (highlightMaterial as any).emissiveIntensity = 0.5;
-          selectedObject.material = highlightMaterial;
-          
-          // Highlight semua node terkait
-          highlightRelatedNodes(node.id);
-        }
-      } else {
-        // Jika klik di area kosong, reset pilihan
-        if (selectedObjectRef) {
-          if (selectedObjectRef.userData && selectedObjectRef.userData.node) {
-            const node = selectedObjectRef.userData.node as HospitalNode;
-            const material = getNodeMaterial(node.group);
-            selectedObjectRef.material = material;
-          }
+        // Jika node yang sama diklik lagi, hapus seleksi
+        if (selectedObjectRef === newSelectedObject) {
           selectedObjectRef = null;
           setSelectedNode(null);
+          return;
         }
+        
+        // Set node yang dipilih
+        selectedObjectRef = newSelectedObject;
+        setSelectedNode(nodeData);
+        
+        // Highlight node yang dipilih dengan warna terang
+        const baseMaterial = ((newSelectedObject as THREE.Mesh).material as THREE.MeshBasicMaterial);
+        baseMaterial.color.set(0xff5500);
+        
+        // Perbesar node yang dipilih
+        newSelectedObject.scale.set(1.3, 1.3, 1.3);
+        
+        // Fokuskan kamera ke node yang dipilih
+        const targetPosition = newSelectedObject.position.clone();
+        // Ganti GSAP dengan animasi manual
+        const startPosition = cameraRef.current.position.clone();
+        const endPosition = new THREE.Vector3(
+          targetPosition.x * 2,
+          targetPosition.y * 2,
+          targetPosition.z * 2
+        );
+        let startTime: number | null = null;
+        const duration = 1000; // ms
+
+        const animateCamera = (timestamp: number) => {
+          if (!startTime) startTime = timestamp;
+          const elapsed = timestamp - startTime;
+          const progress = Math.min(elapsed / duration, 1);
+          
+          // Fungsi easing untuk animasi yang lebih halus
+          const easeOutCubic = (x: number): number => 1 - Math.pow(1 - x, 3);
+          const easedProgress = easeOutCubic(progress);
+          
+          // Interpolasi posisi kamera
+          cameraRef.current?.position.lerpVectors(startPosition, endPosition, easedProgress);
+          cameraRef.current?.lookAt(targetPosition);
+          
+          // Lanjutkan animasi jika belum selesai
+          if (progress < 1) {
+            animationFrame = requestAnimationFrame(animateCamera);
+          }
+        };
+
+        animationFrame = requestAnimationFrame(animateCamera);
       }
     };
     
@@ -674,32 +648,6 @@ function NetworkGraph() {
     renderer.domElement.addEventListener('touchstart', onControlsStart);
     document.addEventListener('mouseup', onControlsEnd);
     document.addEventListener('touchend', onControlsEnd);
-
-    // Integrasikan dengan GSAP untuk animasi yang lebih mulus
-    const highlightRelatedNodes = (nodeId: string) => {
-      // Temukan semua links terkait node
-      const relatedLinks = hospitalData.links.filter(
-        link => link.source === nodeId || link.target === nodeId
-      );
-      
-      // Highlight semua node terkait
-      relatedLinks.forEach(link => {
-        const relatedNodeId = link.source === nodeId ? link.target : link.source;
-        const relatedMesh = nodeObjects[relatedNodeId];
-        
-        if (relatedMesh) {
-          // Gunakan GSAP untuk animasi highlight
-          gsap.to(relatedMesh.scale, {
-            x: 1.2,
-            y: 1.2,
-            z: 1.2,
-            duration: 0.5,
-            yoyo: true,
-            repeat: 1
-          });
-        }
-      });
-    };
 
     // Modifikasi fungsi animate untuk menggunakan sistem frameskip dan fps limiting
     const animate = (timestamp: number) => {
